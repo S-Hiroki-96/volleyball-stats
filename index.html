@@ -261,7 +261,7 @@ input[type="number"] {
   padding: 12px 16px;
   border-bottom: 4px solid var(--black);
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     "score actions"
     "meta  meta";
@@ -269,24 +269,25 @@ input[type="number"] {
   align-items: center;
   position: sticky; top: 0; z-index: 100;
 }
-.topbar > div:first-child { grid-area: score; min-width: 0; }
+.topbar > div:first-child { grid-area: score; min-width: 0; overflow: hidden; }
 
 /* スコア = 巨大な数字 */
 .score {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-family: 'Archivo Black', sans-serif;
-  font-size: clamp(48px, 14vw, 80px);
+  font-size: clamp(40px, 11vw, 72px);
   font-weight: 900;
   line-height: 0.85;
   letter-spacing: -0.06em;
 }
 .score-cell {
-  min-width: 0.9em;
-  padding: 2px 12px;
+  min-width: 1.6em;
+  padding: 2px 10px;
   text-align: center;
   position: relative;
+  box-sizing: border-box;
 }
 .score-cell.us {
   color: var(--paper);
