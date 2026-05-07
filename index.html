@@ -1327,15 +1327,15 @@ input[type="number"] {
     <div id="finalSetScores"></div>
   </div>
   <div class="card">
-    <h2>STATS</h2>
-    <button class="btn large" onclick="showStats('screen-finish')">集計を見る</button>
+    <h2>STATS - 試合全体</h2>
+    <button class="btn large" onclick="showStats('screen-finish', null)">試合全体の集計を見る</button>
   </div>
   <div class="card">
-    <h2>EDIT</h2>
+    <h2>BY SET</h2>
     <p style="font-size:13px;color:var(--text-secondary);margin:0 0 12px;">
-      間違いがあった場合、記録画面に戻って修正できます。最後のセットの状態から再開します。
+      各セットの集計を見たり、記録画面に戻って編集できます。
     </p>
-    <button class="btn outline large" onclick="reopenMatch()">記録画面に戻って編集</button>
+    <div id="finalSetActions"></div>
   </div>
   <div class="card">
     <h2>EXPORT DATA</h2>
@@ -1746,11 +1746,13 @@ function goSetup() {
 }
 function goRecord() { renderRecord(); showScreen('screen-record'); }
 
-// 集計画面を呼び出す。呼び出し元を記憶して戻れるように
+// 集計画面を呼び出す。呼び出し元と表示対象セットを記憶
 let statsReturnScreen = 'screen-record';
-function showStats(fromScreen) {
+let statsFilterSet = null; // null なら全セット、数値なら特定セットのみ
+function showStats(fromScreen, filterSet) {
   if (fromScreen) statsReturnScreen = fromScreen;
   else statsReturnScreen = 'screen-record';
+  statsFilterSet = (filterSet != null) ? filterSet : null;
   renderStats();
   showScreen('screen-stats');
 }
@@ -1841,36 +1843,62 @@ function loadMatch(id) {
   const m = list.find(x => x.matchId === id);
   if (!m) return;
   state = JSON.parse(JSON.stringify(m));
+  // 重複セットのクリーンアップ(過去のバグの後始末)
+  cleanupDuplicateSets();
   // 完了済みのみ閲覧モードで開く(終了画面)
   renderFinishScreen();
   showScreen('screen-finish');
 }
 
-// 完了試合を編集モードで再開
-function reopenMatch() {
+// 同じセット番号の重複を除去(最後のものを優先)
+function cleanupDuplicateSets() {
+  if (!state.sets || state.sets.length === 0) return;
+  const seen = new Map();
+  for (const s of state.sets) {
+    seen.set(s.set, s); // 同じキーで上書き = 最後のものが残る
+  }
+  state.sets = Array.from(seen.values()).sort((a, b) => a.set - b.set);
+  saveMatch();
+}
+
+// 完了試合を編集モードで再開(targetSet 省略時は最後のセット)
+function reopenMatch(targetSet) {
   if (!state.sets || state.sets.length === 0) {
     alert('編集できるセットがありません。');
     return;
   }
-  if (!confirm('最後のセットの状態に戻して記録画面で編集します。\n編集後はサーブ権・ローテーションが正しいか「調整」ボタンで確認してください。よろしいですか?')) return;
 
-  // 最後のセットを取り出し、進行中の状態に戻す
-  const lastSet = state.sets.pop();
-  state.currentSet = lastSet.set;
-  state.currentRallies = lastSet.rallies || [];
-  state.scoreUs = lastSet.scoreUs;
-  state.scoreThem = lastSet.scoreThem;
+  // 編集対象のセットを決定
+  let setIdx;
+  if (targetSet != null) {
+    setIdx = state.sets.findIndex(s => s.set === targetSet);
+    if (setIdx === -1) {
+      alert(`第${targetSet}セットが見つかりません。`);
+      return;
+    }
+  } else {
+    // 最後のセットを編集
+    setIdx = state.sets.length - 1;
+  }
+
+  const targetSetData = state.sets[setIdx];
+  if (!confirm(`第${targetSetData.set}セット (${targetSetData.scoreUs}-${targetSetData.scoreThem}) を編集します。\n編集後はサーブ権・ローテーションが正しいか「調整」ボタンで確認してください。よろしいですか?`)) return;
+
+  // 対象セットを取り出す(state.sets から削除)
+  state.sets.splice(setIdx, 1);
+
+  // 進行中の状態に戻す
+  state.currentSet = targetSetData.set;
+  state.currentRallies = targetSetData.rallies || [];
+  state.scoreUs = targetSetData.scoreUs;
+  state.scoreThem = targetSetData.scoreThem;
 
   // serving と rotationIndex を再計算
-  // 第1セット以外はラリーログから推定が難しいので、最終ラリーの状態から逆算
   if (state.currentSet === 1) {
     recomputeRotationFromRallies();
   } else if (state.currentRallies.length > 0) {
-    // 最後のラリーの直後の状態を再現
     const lastRally = state.currentRallies[state.currentRallies.length - 1];
     state.serving = lastRally.servingSide;
-    // rotationIndex はラリーログから巻き戻すのが難しいので、現状値を保持
-    // ユーザーが「調整」ボタンで確認・修正
     state.rotationIndex = state.rotationIndex || 0;
   }
 
@@ -2473,6 +2501,19 @@ function renderRecord() {
 }
 
 // ============ セット終了/試合終了 ============
+
+// セット保存(同じセット番号があれば上書き、なければ追加)
+function saveOrReplaceSet(setData) {
+  const idx = state.sets.findIndex(s => s.set === setData.set);
+  if (idx !== -1) {
+    state.sets[idx] = setData;
+  } else {
+    state.sets.push(setData);
+  }
+  // セット番号順にソート
+  state.sets.sort((a, b) => a.set - b.set);
+}
+
 function endSetConfirm() {
   document.getElementById('endsetScore').textContent = `${state.scoreUs} - ${state.scoreThem}`;
   document.getElementById('modal-endset').classList.add('active');
@@ -2480,7 +2521,7 @@ function endSetConfirm() {
 
 function confirmEndSet() {
   closeModal('modal-endset');
-  state.sets.push({
+  saveOrReplaceSet({
     set: state.currentSet,
     rallies: state.currentRallies,
     scoreUs: state.scoreUs,
@@ -2494,9 +2535,6 @@ function confirmEndSet() {
   state.rotationIndex = 0;
 
   // サーブ権の決定: ユーザーに毎回選択してもらう
-  // 公式戦(3セットマッチ): 第2セットは前セットの逆、第3セット(最終)はコイントス再実施
-  // 練習試合: セットごとにコイントス、または交互など、運用がさまざま
-  // どの方式にも対応するため、デフォルト案を提示しつつユーザー選択にする
   const defaultSwap = state.serving === 'us' ? 'them' : 'us';
   const defaultLabel = defaultSwap === 'us' ? '自チーム' : '相手チーム';
   const choice = confirm(
@@ -2507,7 +2545,6 @@ function confirmEndSet() {
   );
   state.serving = choice ? defaultSwap : (defaultSwap === 'us' ? 'them' : 'us');
 
-  // スタメン変更を許可するなら、ここで再選択画面を出す...今回はそのまま
   if (confirm('スタメンを変更しますか?\n(OK=変更画面へ、キャンセル=同じスタメンで継続)')) {
     showScreen('screen-setup');
     return;
@@ -2519,7 +2556,7 @@ function confirmEndSet() {
 function confirmEndMatch() {
   closeModal('modal-endset');
   // 現在のセットを保存して終了
-  state.sets.push({
+  saveOrReplaceSet({
     set: state.currentSet,
     rallies: state.currentRallies,
     scoreUs: state.scoreUs,
@@ -2540,6 +2577,22 @@ function renderFinishScreen() {
   document.getElementById('finalSetScores').innerHTML = state.sets.map(s =>
     `<div style="padding:6px 0;border-bottom:1px solid #f2f2f7;">第${s.set}セット: ${s.scoreUs} - ${s.scoreThem} (${s.winner === 'us' ? '勝' : '負'})</div>`
   ).join('');
+
+  // セット別アクションボタン
+  const actionsEl = document.getElementById('finalSetActions');
+  if (actionsEl) {
+    actionsEl.innerHTML = state.sets.map(s => `
+      <div style="border:2px solid var(--black);padding:10px;margin-bottom:10px;background:var(--paper);">
+        <div style="font-weight:900;font-size:14px;margin-bottom:8px;">
+          第${s.set}セット: ${s.scoreUs} - ${s.scoreThem} (${s.winner === 'us' ? '勝' : '負'})
+        </div>
+        <div class="row">
+          <button class="btn small" onclick="showStats('screen-finish', ${s.set})">このセットの集計</button>
+          <button class="btn small outline" onclick="reopenMatch(${s.set})">このセットを編集</button>
+        </div>
+      </div>
+    `).join('');
+  }
 }
 
 // ============ 集計画面 ============
@@ -2548,9 +2601,30 @@ let heatmapType = 'them_ace';
 let heatmapRotFilter = 'all';
 
 function renderStats() {
-  document.getElementById('statsScoreUs').textContent = state.scoreUs;
-  document.getElementById('statsScoreThem').textContent = state.scoreThem;
-  document.getElementById('statsMeta').textContent = `SET ${state.currentSet}`;
+  // 表示対象に応じてメタ情報を更新
+  if (statsFilterSet != null) {
+    // 特定セットの集計
+    const target = state.sets.find(s => s.set === statsFilterSet);
+    if (target) {
+      document.getElementById('statsScoreUs').textContent = target.scoreUs;
+      document.getElementById('statsScoreThem').textContent = target.scoreThem;
+      document.getElementById('statsMeta').textContent = `第${target.set}セット`;
+    } else {
+      document.getElementById('statsMeta').textContent = `第${statsFilterSet}セット`;
+    }
+  } else if (statsReturnScreen === 'screen-finish') {
+    // 試合全体
+    const wins = state.sets.filter(s => s.winner === 'us').length;
+    const losses = state.sets.length - wins;
+    document.getElementById('statsScoreUs').textContent = wins;
+    document.getElementById('statsScoreThem').textContent = losses;
+    document.getElementById('statsMeta').textContent = `試合全体 (${state.sets.length}セット)`;
+  } else {
+    // 試合中(現在のセット)
+    document.getElementById('statsScoreUs').textContent = state.scoreUs;
+    document.getElementById('statsScoreThem').textContent = state.scoreThem;
+    document.getElementById('statsMeta').textContent = `SET ${state.currentSet}`;
+  }
   switchStatsTab(currentStatsTab);
 }
 
@@ -2558,19 +2632,26 @@ function switchStatsTab(tab) {
   currentStatsTab = tab;
   document.querySelectorAll('#screen-stats .tab').forEach(t => t.classList.remove('active'));
   event && event.target.classList.add('active');
-  // ボタンが見つからない場合(初回)
   if (!event) {
     const tabs = document.querySelectorAll('#screen-stats .tab');
     const map = ['summary', 'heatmap', 'individual', 'rotation'];
     tabs.forEach((t, i) => t.classList.toggle('active', map[i] === tab));
   }
 
-  const allRallies = getAllRallies();
+  // ラリーの取得: フィルタが指定されていればそのセットだけ、そうでなければ全部
+  let rallies;
+  if (statsFilterSet != null) {
+    const target = state.sets.find(s => s.set === statsFilterSet);
+    rallies = target ? (target.rallies || []) : [];
+  } else {
+    rallies = getAllRallies();
+  }
+
   const div = document.getElementById('statsTabContent');
-  if (tab === 'summary') div.innerHTML = renderSummary(allRallies);
-  else if (tab === 'heatmap') div.innerHTML = renderHeatmap(allRallies);
-  else if (tab === 'individual') div.innerHTML = renderIndividual(allRallies);
-  else if (tab === 'rotation') div.innerHTML = renderRotation(allRallies);
+  if (tab === 'summary') div.innerHTML = renderSummary(rallies);
+  else if (tab === 'heatmap') div.innerHTML = renderHeatmap(rallies);
+  else if (tab === 'individual') div.innerHTML = renderIndividual(rallies);
+  else if (tab === 'rotation') div.innerHTML = renderRotation(rallies);
 }
 
 function getAllRallies() {
