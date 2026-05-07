@@ -798,6 +798,29 @@ input[type="number"] {
   color: var(--paper);
 }
 
+/* ====== SET SELECTOR ====== */
+.set-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+.set-selector button {
+  padding: 6px 12px;
+  border: 2px solid var(--black);
+  background: var(--paper);
+  font-family: 'Archivo Black', sans-serif;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  color: var(--black);
+  text-transform: uppercase;
+}
+.set-selector button.active {
+  background: var(--yellow);
+}
+
 /* ====== HEATMAP ====== */
 .heatmap-controls {
   display: flex;
@@ -1291,6 +1314,7 @@ input[type="number"] {
     <button class="btn small secondary" id="statsBackBtn" onclick="statsGoBack()">← 戻る</button>
   </div>
   <div style="padding:12px;">
+    <div id="statsSetSelector" class="set-selector"></div>
     <div class="tabs">
       <button class="tab active" onclick="switchStatsTab('summary')">SUMMARY</button>
       <button class="tab" onclick="switchStatsTab('heatmap')">HEATMAP</button>
@@ -1748,11 +1772,24 @@ function goRecord() { renderRecord(); showScreen('screen-record'); }
 
 // 集計画面を呼び出す。呼び出し元と表示対象セットを記憶
 let statsReturnScreen = 'screen-record';
-let statsFilterSet = null; // null なら全セット、数値なら特定セットのみ
+let statsFilterSet = null; // null=全試合、数値=特定セット、'current'=進行中セット
 function showStats(fromScreen, filterSet) {
   if (fromScreen) statsReturnScreen = fromScreen;
   else statsReturnScreen = 'screen-record';
-  statsFilterSet = (filterSet != null) ? filterSet : null;
+
+  // デフォルトのフィルタを決定
+  if (filterSet !== undefined) {
+    // 明示的に指定された場合
+    statsFilterSet = filterSet;
+  } else {
+    // 未指定: 試合中なら「現在のセット」、それ以外は「全試合」
+    if (statsReturnScreen === 'screen-record' && state.currentRallies && state.currentRallies.length > 0) {
+      statsFilterSet = 'current';
+    } else {
+      statsFilterSet = null;
+    }
+  }
+
   renderStats();
   showScreen('screen-stats');
 }
@@ -2601,6 +2638,9 @@ let heatmapType = 'them_ace';
 let heatmapRotFilter = 'all';
 
 function renderStats() {
+  // セット選択UIを構築
+  renderStatsSetSelector();
+
   // 表示対象に応じてメタ情報を更新
   if (statsFilterSet != null) {
     // 特定セットの集計
@@ -2609,23 +2649,73 @@ function renderStats() {
       document.getElementById('statsScoreUs').textContent = target.scoreUs;
       document.getElementById('statsScoreThem').textContent = target.scoreThem;
       document.getElementById('statsMeta').textContent = `第${target.set}セット`;
+    } else if (statsFilterSet === 'current') {
+      // 現在のセット
+      document.getElementById('statsScoreUs').textContent = state.scoreUs;
+      document.getElementById('statsScoreThem').textContent = state.scoreThem;
+      document.getElementById('statsMeta').textContent = `第${state.currentSet}セット (進行中)`;
     } else {
       document.getElementById('statsMeta').textContent = `第${statsFilterSet}セット`;
     }
-  } else if (statsReturnScreen === 'screen-finish') {
-    // 試合全体
+  } else {
+    // 試合全体(完了試合 or 試合中の全セット合算)
     const wins = state.sets.filter(s => s.winner === 'us').length;
     const losses = state.sets.length - wins;
-    document.getElementById('statsScoreUs').textContent = wins;
-    document.getElementById('statsScoreThem').textContent = losses;
-    document.getElementById('statsMeta').textContent = `試合全体 (${state.sets.length}セット)`;
-  } else {
-    // 試合中(現在のセット)
-    document.getElementById('statsScoreUs').textContent = state.scoreUs;
-    document.getElementById('statsScoreThem').textContent = state.scoreThem;
-    document.getElementById('statsMeta').textContent = `SET ${state.currentSet}`;
+    if (state.sets.length > 0) {
+      document.getElementById('statsScoreUs').textContent = wins;
+      document.getElementById('statsScoreThem').textContent = losses;
+      document.getElementById('statsMeta').textContent = `試合全体 (${state.sets.length}セット${state.currentRallies.length > 0 ? '+進行中' : ''})`;
+    } else {
+      // セットが1つも完了していない = 試合の最初
+      document.getElementById('statsScoreUs').textContent = state.scoreUs;
+      document.getElementById('statsScoreThem').textContent = state.scoreThem;
+      document.getElementById('statsMeta').textContent = `第${state.currentSet}セット`;
+    }
   }
   switchStatsTab(currentStatsTab);
+}
+
+// 集計画面の上部に「全試合 / 第1 / 第2 / 現在」のセレクタを生成
+function renderStatsSetSelector() {
+  const el = document.getElementById('statsSetSelector');
+  if (!el) return;
+
+  const buttons = [];
+  // 「全試合」ボタン: 完了セットがあるときだけ意味があるので、それがあれば表示
+  if (state.sets.length > 0 || state.currentRallies.length > 0) {
+    buttons.push({
+      key: 'all',
+      label: '全試合',
+      active: statsFilterSet == null
+    });
+  }
+  // 完了済みセット
+  state.sets.forEach(s => {
+    buttons.push({
+      key: String(s.set),
+      label: `第${s.set}`,
+      active: statsFilterSet === s.set
+    });
+  });
+  // 進行中セット(記録画面から来た場合のみ)
+  if (state.currentRallies && state.currentRallies.length > 0) {
+    buttons.push({
+      key: 'current',
+      label: `第${state.currentSet} (進行中)`,
+      active: statsFilterSet === 'current'
+    });
+  }
+
+  el.innerHTML = buttons.map(b =>
+    `<button class="${b.active ? 'active' : ''}" onclick="setStatsFilter('${b.key}')">${b.label}</button>`
+  ).join('');
+}
+
+function setStatsFilter(key) {
+  if (key === 'all') statsFilterSet = null;
+  else if (key === 'current') statsFilterSet = 'current';
+  else statsFilterSet = parseInt(key, 10);
+  renderStats();
 }
 
 function switchStatsTab(tab) {
@@ -2640,7 +2730,9 @@ function switchStatsTab(tab) {
 
   // ラリーの取得: フィルタが指定されていればそのセットだけ、そうでなければ全部
   let rallies;
-  if (statsFilterSet != null) {
+  if (statsFilterSet === 'current') {
+    rallies = state.currentRallies || [];
+  } else if (statsFilterSet != null) {
     const target = state.sets.find(s => s.set === statsFilterSet);
     rallies = target ? (target.rallies || []) : [];
   } else {
